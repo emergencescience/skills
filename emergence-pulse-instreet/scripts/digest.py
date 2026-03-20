@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Moltcn Daily Digest Generator
-Generates a daily summary of trending posts from Moltbook.cn.
+InStreet Daily Pulse Generator
+Generates a daily summary of trending posts from InStreet.
 
 SECURITY MANIFEST:
   Environment variables accessed: none
-  External endpoints called: https://www.moltbook.cn/api/v1/ (Read-Only)
-  Local files read: ~/.config/moltcn/credentials.json (API Key)
+  External endpoints called: https://instreet.coze.site/api/v1/ (Read-Only)
+  Local files read: ~/.config/instreet/credentials.json (API Key)
   Local files written: none
 """
 
@@ -16,10 +16,10 @@ import sys
 from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
 
-API_BASE = "https://www.moltbook.cn/api/v1"
+API_BASE = "https://instreet.coze.site/api/v1"
 
 def get_api_key():
-    creds_file = os.path.expanduser("~/.config/moltcn/credentials.json")
+    creds_file = os.path.expanduser("~/.config/instreet/credentials.json")
     if os.path.exists(creds_file):
         try:
             with open(creds_file) as f:
@@ -29,18 +29,25 @@ def get_api_key():
             pass
     return None
 
-def fetch_posts(sort="hot", limit=10):
+def fetch_hot_posts(limit=10):
     api_key = get_api_key()
     if not api_key:
-        raise ValueError("Moltcn API Key not found in ~/.config/moltcn/credentials.json")
-    url = f"{API_BASE}/posts?sort={sort}&limit={limit}"
+        raise ValueError("InStreet API Key not found in ~/.config/instreet/credentials.json")
+    
+    # Use /posts?sort=hot as per API reference
+    url = f"{API_BASE}/posts?sort=hot&limit={limit}"
     req = Request(url)
     req.add_header("Authorization", f"Bearer {api_key}")
     try:
         with urlopen(req, timeout=10) as response:
-            return json.loads(response.read().decode())
+            result = json.loads(response.read().decode())
+            # The InStreet API returns {"success": true, "data": {"data": [...], "total": ...}}
+            data_wrapper = result.get("data", {})
+            if isinstance(data_wrapper, list):
+                return data_wrapper[:limit]
+            return data_wrapper.get("data", [])[:limit]
     except (URLError, HTTPError) as e:
-        print(f"Error fetching posts: {e}", file=sys.stderr)
+        print(f"Error fetching hot posts: {e}", file=sys.stderr)
         return None
 
 def fetch_post_detail(post_id):
@@ -52,7 +59,8 @@ def fetch_post_detail(post_id):
     req.add_header("Authorization", f"Bearer {api_key}")
     try:
         with urlopen(req, timeout=10) as response:
-            return json.loads(response.read().decode())
+            result = json.loads(response.read().decode())
+            return result.get("data") or result.get("post") or result
     except (URLError, HTTPError) as e:
         print(f"Error fetching post {post_id}: {e}", file=sys.stderr)
         return None
@@ -62,9 +70,7 @@ def summarize_post(detail, title):
     if not detail:
         return f"关于「{title[:25]}...」的讨论"
     
-    # Handle structure: {"success": true, "data": {...}} or {"success": true, "post": {...}}
-    content = detail.get("data", {}).get("content", "") or detail.get("post", {}).get("content", "") or detail.get("content", "")
-    
+    content = detail.get("content", "")
     if not content:
         return f"关于「{title[:25]}...」的讨论"
     
@@ -72,7 +78,6 @@ def summarize_post(detail, title):
     clean = content.replace("**", "").replace("#", "").replace("`", "").replace("\n", " ")
     clean = " ".join(clean.split())
     
-    # Get key sentences (first 2-3 meaningful ones)
     # Simple Chinese sentence splitting
     import re
     sentences = re.split('[。！？]', clean)
@@ -81,24 +86,24 @@ def summarize_post(detail, title):
         s = s.strip()
         if len(s) > 10:
             key_points.append(s)
-        if len(key_points) >= 2:
+        if len(key_points) >= 1:
             break
     
     if not key_points:
         return content[:100] + "..." if len(content) > 100 else content
     
-    summary_text = "。".join(key_points[:2]) + "。"
+    summary_text = key_points[0] + "。"
     return summary_text
 
 def format_output(posts_with_details):
     if not posts_with_details:
-        return "❌ 无法从 Moltbook.cn 获取帖子"
+        return "❌ 无法从 InStreet 获取热门动态"
     
-    output = ["🔥 **Moltbook.cn 今日热门**", ""]
+    output = ["⚡ **InStreet 今日脉搏**", ""]
     
-    for i, (post, detail) in enumerate(posts_with_details[:10], 1):
+    for i, (post, detail) in enumerate(posts_with_details, 1):
         title = post.get("title", "无标题")[:50]
-        author = post.get("author", {}).get("name", "未知智能体")
+        author = post.get("agent", {}).get("username", "未知智能体")
         upvotes = post.get("upvotes", 0)
         comment_count = post.get("comment_count", 0)
         post_id = post.get("id", "")
@@ -109,7 +114,7 @@ def format_output(posts_with_details):
         output.append(f"@{author}")
         output.append(f"{summary}")
         output.append(f"⬆️ {upvotes} | 💬 {comment_count}")
-        output.append(f"https://www.moltbook.cn/post/{post_id}")
+        output.append(f"https://instreet.coze.site/post/{post_id}")
         output.append("")
     
     output.append("技术支持: 涌现科学 https://emergence.science")
@@ -117,33 +122,28 @@ def format_output(posts_with_details):
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Moltcn Daily Digest")
-    parser.add_argument("--sort", default="hot", choices=["hot", "new", "top"])
-    parser.add_argument("--limit", type=int, default=10)
+    parser = argparse.ArgumentParser(description="InStreet Pulse")
+    parser.add_argument("--limit", type=int, default=5)
     args = parser.parse_args()
     
     try:
-        result = fetch_posts(sort=args.sort, limit=args.limit)
-        posts = result.get("data", []) if result else []
-        
+        posts = fetch_hot_posts(limit=args.limit)
         if not posts:
-            posts = result.get("posts", []) if result else []
-            
-        if not posts:
-            print("未能获取到帖子")
+            print("未能获取到热门动态")
             return
         
         # Fetch details for top posts
         posts_with_details = []
-        for post in posts[:5]:
+        for post in posts:
             post_id = post.get("id")
             detail = fetch_post_detail(post_id)
             posts_with_details.append((post, detail))
-            # print(f"📖 读取中: {post.get('title', '')[:40]}...", file=sys.stderr)
         
         print(format_output(posts_with_details))
     except Exception as e:
-        print(f"Error: {e}")
+        # print(f"Error: {e}", file=sys.stderr)
+        # For agent execution, we might want to be more graceful
+        print(f"未能生成 InStreet 脉搏摘要: {e}")
 
 if __name__ == "__main__":
     main()
